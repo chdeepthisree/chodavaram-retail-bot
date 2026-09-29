@@ -1,7 +1,9 @@
 import json
 import os
 import requests
+import threading
 from dotenv import load_dotenv
+from django.db import IntegrityError, transaction
 from django.http import HttpResponse, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from .models import Product, CustomerLead, ChatLog
@@ -11,7 +13,7 @@ load_dotenv()
 
 def ask_groq_agent(customer_msg, inventory, history):
     api_key = os.getenv("GROQ_API_KEY")
-    print("DEBUG GROQ KEY:",api_key[:8] if api_key else "MISSING KEY")
+
     if not api_key:
         return "క్షమించండి, సర్వర్ ఆకృతీకరణ లోపం ఉంది."
 
@@ -35,8 +37,9 @@ Rule 4: Never invent products not listed in the inventory."""
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json"
     }
+
     payload = {
-        "model": "openai/gpt-oss-20b",
+        "model": "llama-3.1-8b-instant",
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": customer_msg}
@@ -52,24 +55,20 @@ Rule 4: Never invent products not listed in the inventory."""
             timeout=10
         )
         data = res.json()
-        
-        # Print actual error payload if Groq rejects the call
         if "error" in data:
-            print("GROQ REJECTED REQUEST:", data["error"])
             return "క్షమించండి, సర్వర్ ఆకృతీకరణ లోపం ఉంది."
-            
         return data["choices"][0]["message"]["content"]
-        
     except Exception as e:
         print(f"Groq API Error: {e}")
         return "క్షమించండి, సర్వర్ అందుబాటులో లేదు. దయచేసి కొసేపటి తర్వాత ప్రయత్నించండి."
+
 
 def reply_via_whatsapp(recipient_phone, reply_text):
     phone_id = os.getenv("WHATSAPP_PHONE_ID") or os.getenv("PHONE_NUMBER_ID")
     token = os.getenv("WHATSAPP_CLOUD_API_TOKEN") or os.getenv("WHATSAPP_TOKEN")
 
     if not phone_id or not token:
-        print("ERROR: WhatsApp API credentials missing in environment.")
+        print("ERROR: WhatsApp API credentials missing.")
         return
 
     url = f"https://graph.facebook.com/v20.0/{phone_id}/messages"
@@ -84,69 +83,61 @@ def reply_via_whatsapp(recipient_phone, reply_text):
         "text": {"body": reply_text}
     }
 
-    res = requests.post(url, json=payload, headers=headers)
-    print("Meta Response Status:", res.status_code)
+    requests.post(url, json=payload, headers=headers)
 
 
-@csrf_exempt
-def whatsapp_bot_webhook(request):
-    # 1. VERIFICATION (GET)
-    if request.method == "GET":
-        mode = request.GET.get("hub.mode")
-        token = request.GET.get("hub.verify_token")
-        challenge = request.GET.get("hub.challenge")
+def process_whatsapp_payload_in_background(body):
+    try:
+        value = body["entry"][0]["changes"][0]["value"]
 
-        if mode == "subscribe" and token == "chodavaram_secret":
-            return HttpResponse(challenge, status=200)
+        # 1. Ignore non-message events (e.g., status updates for read/delivered)
+        if "messages" not in value:
+            return
 
-        return HttpResponse("Verification failed", status=403)
+       message_data = value["messages"][0]
+from_phone = message_data.get("from")
+whatsapp_message_id = message_data.get("id")
 
-    # 2. RECEIVE MESSAGES (POST)
-    if request.method == "POST":
-        try:
-            body = json.loads(request.body.decode("utf-8"))
-            value = body["entry"][0]["changes"][0]["value"]
+print("WHATSAPP MESSAGE ID:", whatsapp_message_id)
+print("WHATSAPP MESSAGE TEXT:", message_data.get("text", {}).get("body", ""))
 
-            # Filter out status events (delivered, read notifications)
-            if "messages" not in value:
-                return JsonResponse({"status": "ignored_status_update"}, status=200)
+        if not whatsapp_message_id:
+            return
 
-            message_data = value["messages"][0]
-            from_phone = message_data.get("from")
+        text_dict = message_data.get("text") or {}
+        user_text = text_dict.get("body", "").strip()
 
-            # Extract user message safely
-            text_dict = message_data.get("text") or {}
-            user_text = text_dict.get("body", "").strip()
+        if not user_text:
+            return
 
-            if not user_text:
-                return JsonResponse({"status": "ignored_non_text"}, status=200)
+        # 2. ATOMIC LOCK / DEDUPLICATION CHECK
+        # We save the ChatLog IMMEDIATELY before generating AI response.
+        # If another thread tries to save the same whatsapp_message_id, it will be caught here.
+        with transaction.atomic():
+            if ChatLog.objects.filter(whatsapp_message_id=whatsapp_message_id).exists():
+                print(f"DUPLICATE BLOCKED: Message ID {whatsapp_message_id} already exists.")
+                return
 
-        except (KeyError, IndexError, TypeError, json.JSONDecodeError) as err:
-            print(f"Payload parse error: {err}")
-            return JsonResponse({"status": "ignored_format"}, status=200)
+            customer, _ = CustomerLead.objects.get_or_create(phone_number=from_phone)
 
-        # 3. DB & CHAT MANAGEMENT
-        customer, _ = CustomerLead.objects.get_or_create(phone_number=from_phone)
-
-        ChatLog.objects.create(
-            customer=customer,
-            sender="USER",
-            message=user_text
-        )
+            # Create USER log entry FIRST to claim this whatsapp_message_id locks out duplicates
+            ChatLog.objects.create(
+                customer=customer,
+                sender="USER",
+                message=user_text,
+                whatsapp_message_id=whatsapp_message_id
+            )
 
         if customer.needs_human_help:
-            return JsonResponse({"status": "muted_waiting_for_owner"}, status=200)
+            return
 
-        # 4. PREPARE CONTEXT
+        # 3. PREPARE CONTEXT & GENERATE RESPONSE
         items = Product.objects.filter(is_available=True)
-        inv_str = "\n".join(
-            [f"- {i.name} ({i.get_category_display()}): Rs.{i.price} [Stock: {i.stock_quantity}]" for i in items]
-        )
+        inv_str = "\n".join([f"- {i.name} ({i.get_category_display()}): Rs.{i.price} [Stock: {i.stock_quantity}]" for i in items])
 
         past_logs = ChatLog.objects.filter(customer=customer).order_by("-timestamp")[:4]
         history_str = "\n".join([f"{l.sender}: {l.message}" for l in reversed(past_logs)])
 
-        # 5. GENERATE & SEND REPLY
         ai_raw_response = ask_groq_agent(user_text, inv_str, history_str)
 
         if "[HUMAN_REQUIRED]" in ai_raw_response:
@@ -156,13 +147,49 @@ def whatsapp_bot_webhook(request):
         else:
             ai_clean_response = ai_raw_response
 
+        # Save AI Response Log
         ChatLog.objects.create(
             customer=customer,
             sender="AI",
             message=ai_clean_response
         )
 
+        # Send reply
         reply_via_whatsapp(from_phone, ai_clean_response)
-        return JsonResponse({"status": "success"}, status=200)
+
+    except Exception as e:
+        print(f"Error in background execution: {e}")
+
+
+@csrf_exempt
+def whatsapp_bot_webhook(request):
+    if request.method == "GET":
+        mode = request.GET.get("hub.mode")
+        token = request.GET.get("hub.verify_token")
+        challenge = request.GET.get("hub.challenge")
+
+        expected_token = os.getenv("VERIFY_TOKEN") or "chodavaram_secret"
+
+        if mode == "subscribe" and token == expected_token:
+            return HttpResponse(challenge, status=200)
+
+        return HttpResponse("Verification failed", status=403)
+
+    if request.method == "POST":
+        try:
+            body = json.loads(request.body.decode("utf-8"))
+
+            # Dispatch background worker immediately
+            thread = threading.Thread(
+                target=process_whatsapp_payload_in_background,
+                args=(body,)
+            )
+            thread.start()
+
+            # Fast 200 OK return to stop Meta retries
+            return HttpResponse("EVENT_RECEIVED", status=200)
+
+        except json.JSONDecodeError:
+            return JsonResponse({"status": "invalid_json"}, status=400)
 
     return JsonResponse({"status": "method_not_allowed"}, status=405)

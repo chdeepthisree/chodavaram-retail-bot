@@ -94,12 +94,15 @@ def process_whatsapp_payload_in_background(body):
         if "messages" not in value:
             return
 
-       message_data = value["messages"][0]
-from_phone = message_data.get("from")
-whatsapp_message_id = message_data.get("id")
+        message_data = value["messages"][0]
+        from_phone = message_data.get("from")
+        whatsapp_message_id = message_data.get("id")
 
-print("WHATSAPP MESSAGE ID:", whatsapp_message_id)
-print("WHATSAPP MESSAGE TEXT:", message_data.get("text", {}).get("body", ""))
+        print("WHATSAPP MESSAGE ID:", whatsapp_message_id)
+        print(
+            "WHATSAPP MESSAGE TEXT:",
+            message_data.get("text", {}).get("body", "")
+        )
 
         if not whatsapp_message_id:
             return

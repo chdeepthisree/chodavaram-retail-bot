@@ -51,4 +51,14 @@ class ChatLog(models.Model):
         ]
     )
     message = models.TextField()
+    whatsapp_message_id = models.CharField(
+        max_length=255,
+        blank=True,
+        null=True,
+        unique=True,
+        db_index=True
+    )
     timestamp = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.customer.phone_number} ({self.sender}): {self.message[:30]}"

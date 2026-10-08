@@ -20,7 +20,7 @@ def ask_groq_agent(customer_msg, inventory, history):
     system_prompt = f"""You are a polite, helpful AI assistant for a retail shop in Chodavaram, Andhra Pradesh.
 Always reply respectfully. Speak in natural conversational Telugu using the Telugu script.
 If the customer texts in English script (e.g., 'pappu price entha'), respond in clear Telugu script.
-Use friendly local markers like 'andi' (అండి) and 'namaste' (నమస్తే).
+Use friendly local markers like 'andi' (అండి) and 'namaste' (నమస్కారం).
 
 LIVE STORE INVENTORY AVAILABLE RIGHT NOW:
 {inventory}
@@ -39,7 +39,7 @@ Rule 4: Never invent products not listed in the inventory."""
     }
 
     payload = {
-        "model": "llama-3.1-8b-instant",
+        "model": "openai/gpt-oss-20b",
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": customer_msg}
@@ -55,9 +55,12 @@ Rule 4: Never invent products not listed in the inventory."""
             timeout=10
         )
         data = res.json()
+
         if "error" in data:
             return "క్షమించండి, సర్వర్ ఆకృతీకరణ లోపం ఉంది."
+
         return data["choices"][0]["message"]["content"]
+
     except Exception as e:
         print(f"Groq API Error: {e}")
         return "క్షమించండి, సర్వర్ అందుబాటులో లేదు. దయచేసి కొసేపటి తర్వాత ప్రయత్నించండి."
@@ -72,10 +75,12 @@ def reply_via_whatsapp(recipient_phone, reply_text):
         return
 
     url = f"https://graph.facebook.com/v20.0/{phone_id}/messages"
+
     headers = {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json"
     }
+
     payload = {
         "messaging_product": "whatsapp",
         "to": recipient_phone,
@@ -114,16 +119,21 @@ def process_whatsapp_payload_in_background(body):
             return
 
         # 2. ATOMIC LOCK / DEDUPLICATION CHECK
-        # We save the ChatLog IMMEDIATELY before generating AI response.
-        # If another thread tries to save the same whatsapp_message_id, it will be caught here.
         with transaction.atomic():
-            if ChatLog.objects.filter(whatsapp_message_id=whatsapp_message_id).exists():
-                print(f"DUPLICATE BLOCKED: Message ID {whatsapp_message_id} already exists.")
+            if ChatLog.objects.filter(
+                whatsapp_message_id=whatsapp_message_id
+            ).exists():
+                print(
+                    f"DUPLICATE BLOCKED: Message ID "
+                    f"{whatsapp_message_id} already exists."
+                )
                 return
 
-            customer, _ = CustomerLead.objects.get_or_create(phone_number=from_phone)
+            customer, _ = CustomerLead.objects.get_or_create(
+                phone_number=from_phone
+            )
 
-            # Create USER log entry FIRST to claim this whatsapp_message_id locks out duplicates
+            # Create USER log entry FIRST to claim this message ID
             ChatLog.objects.create(
                 customer=customer,
                 sender="USER",
@@ -136,17 +146,36 @@ def process_whatsapp_payload_in_background(body):
 
         # 3. PREPARE CONTEXT & GENERATE RESPONSE
         items = Product.objects.filter(is_available=True)
-        inv_str = "\n".join([f"- {i.name} ({i.get_category_display()}): Rs.{i.price} [Stock: {i.stock_quantity}]" for i in items])
 
-        past_logs = ChatLog.objects.filter(customer=customer).order_by("-timestamp")[:4]
-        history_str = "\n".join([f"{l.sender}: {l.message}" for l in reversed(past_logs)])
+        inv_str = "\n".join([
+            f"- {i.name} ({i.get_category_display()}): "
+            f"Rs.{i.price} [Stock: {i.stock_quantity}]"
+            for i in items
+        ])
 
-        ai_raw_response = ask_groq_agent(user_text, inv_str, history_str)
+        past_logs = ChatLog.objects.filter(
+            customer=customer
+        ).order_by("-timestamp")[:4]
+
+        history_str = "\n".join([
+            f"{l.sender}: {l.message}"
+            for l in reversed(past_logs)
+        ])
+
+        ai_raw_response = ask_groq_agent(
+            user_text,
+            inv_str,
+            history_str
+        )
 
         if "[HUMAN_REQUIRED]" in ai_raw_response:
             customer.needs_human_help = True
             customer.save()
-            ai_clean_response = ai_raw_response.replace("[HUMAN_REQUIRED]", "").strip()
+
+            ai_clean_response = ai_raw_response.replace(
+                "[HUMAN_REQUIRED]",
+                ""
+            ).strip()
         else:
             ai_clean_response = ai_raw_response
 
@@ -158,7 +187,10 @@ def process_whatsapp_payload_in_background(body):
         )
 
         # Send reply
-        reply_via_whatsapp(from_phone, ai_clean_response)
+        reply_via_whatsapp(
+            from_phone,
+            ai_clean_response
+        )
 
     except Exception as e:
         print(f"Error in background execution: {e}")
@@ -171,28 +203,46 @@ def whatsapp_bot_webhook(request):
         token = request.GET.get("hub.verify_token")
         challenge = request.GET.get("hub.challenge")
 
-        expected_token = os.getenv("VERIFY_TOKEN") or "chodavaram_secret"
+        expected_token = (
+            os.getenv("VERIFY_TOKEN")
+            or "chodavaram_secret"
+        )
 
         if mode == "subscribe" and token == expected_token:
             return HttpResponse(challenge, status=200)
 
-        return HttpResponse("Verification failed", status=403)
+        return HttpResponse(
+            "Verification failed",
+            status=403
+        )
 
     if request.method == "POST":
         try:
-            body = json.loads(request.body.decode("utf-8"))
+            body = json.loads(
+                request.body.decode("utf-8")
+            )
 
             # Dispatch background worker immediately
             thread = threading.Thread(
                 target=process_whatsapp_payload_in_background,
                 args=(body,)
             )
+
             thread.start()
 
             # Fast 200 OK return to stop Meta retries
-            return HttpResponse("EVENT_RECEIVED", status=200)
+            return HttpResponse(
+                "EVENT_RECEIVED",
+                status=200
+            )
 
         except json.JSONDecodeError:
-            return JsonResponse({"status": "invalid_json"}, status=400)
+            return JsonResponse(
+                {"status": "invalid_json"},
+                status=400
+            )
 
-    return JsonResponse({"status": "method_not_allowed"}, status=405)
+    return JsonResponse(
+        {"status": "method_not_allowed"},
+        status=405
+    )

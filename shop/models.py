@@ -1,3 +1,4 @@
+
 from django.db import models
 
 
@@ -7,6 +8,7 @@ class Product(models.Model):
         ('FANCY', 'Fancy & Cosmetics'),
         ('GIFT', 'Gifts & Toys'),
         ('HARDWARE', 'Hardware & Cement'),
+        ('STATIONERY', 'Stationery'),
     ]
 
     name = models.CharField(max_length=255)
@@ -62,3 +64,4 @@ class ChatLog(models.Model):
 
     def __str__(self):
         return f"{self.customer.phone_number} ({self.sender}): {self.message[:30]}"
+    

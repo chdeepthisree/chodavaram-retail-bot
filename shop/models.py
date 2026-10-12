@@ -7,8 +7,8 @@ class Product(models.Model):
         ('GROCERY', 'Daily Grocery'),
         ('FANCY', 'Fancy & Cosmetics'),
         ('GIFT', 'Gifts & Toys'),
+        ('HARDWARE','Hardware & Cement')
         
-        ('STATIONERY', 'Stationery'),
     ]
 
     name = models.CharField(max_length=255)

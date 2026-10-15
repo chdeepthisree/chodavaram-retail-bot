@@ -16,9 +16,10 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path
-from shop.views import whatsapp_bot_webhook
+from shop.views import whatsapp_bot_webhook, owner_dashboard
 
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('webhook/', whatsapp_bot_webhook),
+    path('owner/', owner_dashboard, name='owner_dashboard'),
 ]

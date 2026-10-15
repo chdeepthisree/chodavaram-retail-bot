@@ -2,14 +2,19 @@ import json
 import os
 import requests
 import threading
+import time
 from dotenv import load_dotenv
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError, OperationalError, transaction
 from django.http import HttpResponse, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from .models import Product, CustomerLead, ChatLog
+from django.contrib.auth.decorators import login_required
+from django.shortcuts import render, get_object_or_404
 
 load_dotenv()
+from django.db import close_old_connections
 
+processing_lock = threading.Lock()
 
 def ask_groq_agent(customer_msg, inventory, history):
     api_key = os.getenv("GROQ_API_KEY")
@@ -91,7 +96,7 @@ def reply_via_whatsapp(recipient_phone, reply_text):
     requests.post(url, json=payload, headers=headers)
 
 
-def process_whatsapp_payload_in_background(body):
+def _process_whatsapp_payload(body):
     try:
         value = body["entry"][0]["changes"][0]["value"]
 
@@ -194,6 +199,13 @@ def process_whatsapp_payload_in_background(body):
 
     except Exception as e:
         print(f"Error in background execution: {e}")
+def process_whatsapp_payload_in_background(body):
+    close_old_connections()
+    try:
+        with processing_lock:
+            _process_whatsapp_payload(body)
+    finally:
+        close_old_connections()   
 
 
 @csrf_exempt
@@ -246,3 +258,30 @@ def whatsapp_bot_webhook(request):
         {"status": "method_not_allowed"},
         status=405
     )
+@login_required(login_url='/admin/login/')
+def owner_dashboard(request):
+    customers = CustomerLead.objects.order_by('-created_at')
+
+    selected_customer = None
+    customer_id = request.GET.get('customer')
+
+    if customer_id:
+        selected_customer = get_object_or_404(
+            CustomerLead,
+            pk=customer_id
+        )
+    else:
+        selected_customer = customers.first()
+
+    if selected_customer:
+        messages = ChatLog.objects.filter(
+            customer=selected_customer
+        ).order_by('timestamp')
+    else:
+        messages = ChatLog.objects.none()
+
+    return render(request, 'shop/owner_dashboard.html', {
+        'customers': customers,
+        'selected_customer': selected_customer,
+        'messages': messages,
+    })

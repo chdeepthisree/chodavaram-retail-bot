@@ -101,6 +101,14 @@ Open the following URLs in your browser:
 ## 🎯 Project Goal
 
 This project demonstrates the development of a retail assistant that combines AI-powered customer interactions, WhatsApp integration, database-backed product management, and inventory monitoring in a web application.
+## 📸 Project Screenshots
+
+### Owner Dashboard
+
+The owner dashboard provides an overview of product inventory, low-stock alerts, out-of-stock products, and customer conversations.
+
+![Owner Dashboard](owner-dashboard.png)
+
 
 ## 👩‍💻 Author
 

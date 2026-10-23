@@ -1,10 +1,11 @@
-```html
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Shop Owner Dashboard</title>
+
     <style>
         * { box-sizing: border-box; }
 
@@ -24,11 +25,88 @@
         header h1 { margin: 0 0 6px; font-size: 24px; }
         header p { margin: 0; color: #d5e5dd; }
 
+        .inventory {
+            max-width: 1400px;
+            margin: 24px auto 0;
+            padding: 0 24px;
+        }
+
+        .summary {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 16px;
+            margin-bottom: 20px;
+        }
+
+        .stat-card {
+            background: white;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 2px 10px #172b3b0d;
+            border-left: 5px solid #64748b;
+        }
+
+        .stat-card h3 {
+            margin: 0 0 10px;
+            color: #687385;
+            font-size: 14px;
+        }
+
+        .stat-number {
+            font-size: 30px;
+            font-weight: bold;
+        }
+
+        .low-card { border-left-color: #e6a23c; }
+        .out-card { border-left-color: #dc4545; }
+
+        .inventory-panels {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .inventory-panel {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 2px 10px #172b3b0d;
+            min-width: 0;
+        }
+
+        .inventory-panel h2 { margin-top: 0; font-size: 18px; }
+
+        .product-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 0;
+            border-bottom: 1px solid #edf0f4;
+        }
+
+        .product-row:last-child { border-bottom: none; }
+
+        .product-name { font-weight: bold; overflow-wrap: anywhere; }
+
+        .stock-badge {
+            display: inline-block;
+            padding: 5px 9px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: bold;
+            white-space: nowrap;
+        }
+
+        .low-badge { background: #fff0d6; color: #8a5700; }
+        .out-badge { background: #fde5e5; color: #a51f1f; }
+
         .container {
             display: grid;
             grid-template-columns: 300px minmax(0, 1fr);
             gap: 20px;
-            padding: 24px;
+            padding: 0 24px 24px;
             max-width: 1400px;
             margin: auto;
         }
@@ -100,76 +178,139 @@
         }
 
         @media (max-width: 700px) {
-            .container { grid-template-columns: 1fr; padding: 12px; }
+            .inventory { padding: 0 12px; margin-top: 12px; }
+            .summary { grid-template-columns: 1fr; gap: 10px; }
+            .inventory-panels { grid-template-columns: 1fr; gap: 12px; }
+            .container { grid-template-columns: 1fr; padding: 0 12px 12px; }
             .message { max-width: 95%; }
             header { padding: 18px; }
         }
     </style>
 </head>
+
 <body>
     <header>
         <h1>Shop Owner Dashboard</h1>
-        <p>WhatsApp customer messages and bot replies</p>
+        <p>WhatsApp customer messages and inventory management</p>
     </header>
 
-    <main class="container">
-        <section class="panel">
-            <h2>Customers</h2>
+    <main>
+        <!-- Inventory summary -->
+        <section class="inventory">
+            <div class="summary">
+                <div class="stat-card">
+                    <h3>Total Products</h3>
+                    <div class="stat-number">{{ total_products }}</div>
+                </div>
 
-            {% for customer in customers %}
-                <a class="customer {% if selected_customer and selected_customer.pk == customer.pk %}active{% endif %}"
-                   href="?customer={{ customer.pk }}">
-                    <strong>{{ customer.name|default:"Customer" }}</strong>
-                    <div>{{ customer.phone_number }}</div>
-                    <div class="muted">
-                        Joined {{ customer.created_at|date:"d M Y" }}
-                    </div>
-                </a>
-            {% empty %}
-                <div class="empty">No customers recorded yet.</div>
-            {% endfor %}
-        </section>
+                <div class="stat-card low-card">
+                    <h3>Low Stock Products</h3>
+                    <div class="stat-number">{{ low_stock_products|length }}</div>
+                </div>
 
-        <section class="panel">
-            {% if selected_customer %}
-                <h2>Conversation</h2>
-                <p class="muted">
-                    {{ selected_customer.name|default:"Customer" }}
-                    · {{ selected_customer.phone_number }}
-                </p>
+                <div class="stat-card out-card">
+                    <h3>Out of Stock Products</h3>
+                    <div class="stat-number">{{ out_of_stock_products|length }}</div>
+                </div>
+            </div>
 
-                <div class="messages">
-                    {% for message in messages %}
-                        <div class="message
-                            {% if message.sender == 'USER' %}user
-                            {% elif message.sender == 'AI' %}ai
-                            {% else %}human{% endif %}">
-                            <strong>
-                                {% if message.sender == 'USER' %}
-                                    Customer
-                                {% elif message.sender == 'AI' %}
-                                    Bot
-                                {% else %}
-                                    Shop Owner
-                                {% endif %}
-                            </strong>
-                            <p>{{ message.message }}</p>
-                            <span class="muted">
-                                {{ message.timestamp|date:"d M Y, h:i A" }}
+            <div class="inventory-panels">
+                <section class="inventory-panel">
+                    <h2>⚠️ Low Stock Alerts</h2>
+
+                    {% for product in low_stock_products %}
+                        <div class="product-row">
+                            <div>
+                                <div class="product-name">{{ product.name }}</div>
+                                <div class="muted">Price: ₹{{ product.price }}</div>
+                            </div>
+                            <span class="stock-badge low-badge">
+                                {{ product.stock_quantity }} left
                             </span>
                         </div>
                     {% empty %}
-                        <div class="empty">No messages recorded for this customer yet.</div>
+                        <div class="empty">No low-stock products right now.</div>
                     {% endfor %}
-                </div>
-            {% else %}
-                <h2>Customer Conversation</h2>
-                <div class="empty">
-                    Customer conversations will appear here when messages have been recorded.
-                </div>
-            {% endif %}
+                </section>
+
+                <section class="inventory-panel">
+                    <h2>Out of Stock</h2>
+
+                    {% for product in out_of_stock_products %}
+                        <div class="product-row">
+                            <div>
+                                <div class="product-name">{{ product.name }}</div>
+                                <div class="muted">Price: ₹{{ product.price }}</div>
+                            </div>
+                            <span class="stock-badge out-badge">
+                                Out of stock
+                            </span>
+                        </div>
+                    {% empty %}
+                        <div class="empty">No out-of-stock products right now.</div>
+                    {% endfor %}
+                </section>
+            </div>
         </section>
+
+        <!-- Existing customer and conversation panels -->
+        <div class="container">
+            <section class="panel">
+                <h2>Customers</h2>
+
+                {% for customer in customers %}
+                    <a class="customer {% if selected_customer and selected_customer.pk == customer.pk %}active{% endif %}"
+                       href="?customer={{ customer.pk }}">
+                        <strong>{{ customer.name|default:"Customer" }}</strong>
+                        <div>{{ customer.phone_number }}</div>
+                        <div class="muted">
+                            Joined {{ customer.created_at|date:"d M Y" }}
+                        </div>
+                    </a>
+                {% empty %}
+                    <div class="empty">No customers recorded yet.</div>
+                {% endfor %}
+            </section>
+
+            <section class="panel">
+                {% if selected_customer %}
+                    <h2>Conversation</h2>
+                    <p class="muted">
+                        {{ selected_customer.name|default:"Customer" }}
+                        · {{ selected_customer.phone_number }}
+                    </p>
+
+                    <div class="messages">
+                        {% for message in messages %}
+                            <div class="message {% if message.sender == 'USER' %}user{% elif message.sender == 'AI' %}ai{% else %}human{% endif %}">
+                                <strong>
+                                    {% if message.sender == 'USER' %}
+                                        Customer
+                                    {% elif message.sender == 'AI' %}
+                                        Bot
+                                    {% else %}
+                                        Shop Owner
+                                    {% endif %}
+                                </strong>
+                                <p>{{ message.message }}</p>
+                                <span class="muted">
+                                    {{ message.timestamp|date:"d M Y, h:i A" }}
+                                </span>
+                            </div>
+                        {% empty %}
+                            <div class="empty">
+                                No messages recorded for this customer yet.
+                            </div>
+                        {% endfor %}
+                    </div>
+                {% else %}
+                    <h2>Customer Conversation</h2>
+                    <div class="empty">
+                        Customer conversations will appear here when messages have been recorded.
+                    </div>
+                {% endif %}
+            </section>
+        </div>
     </main>
 </body>
 </html>
-```

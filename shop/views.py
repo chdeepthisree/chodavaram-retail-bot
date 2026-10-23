@@ -1,20 +1,24 @@
+
 import json
 import os
 import requests
 import threading
-import time
 from dotenv import load_dotenv
+
 from django.db import IntegrityError, OperationalError, transaction
+from django.db import close_old_connections
 from django.http import HttpResponse, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
-from .models import Product, CustomerLead, ChatLog
 from django.contrib.auth.decorators import login_required
 from django.shortcuts import render, get_object_or_404
 
+from .models import Product, CustomerLead, ChatLog
+
+
 load_dotenv()
-from django.db import close_old_connections
 
 processing_lock = threading.Lock()
+
 
 def ask_groq_agent(customer_msg, inventory, history):
     api_key = os.getenv("GROQ_API_KEY")
@@ -40,16 +44,16 @@ Rule 4: Never invent products not listed in the inventory."""
 
     headers = {
         "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
     }
 
     payload = {
         "model": "openai/gpt-oss-20b",
         "messages": [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": customer_msg}
+            {"role": "user", "content": customer_msg},
         ],
-        "temperature": 0.2
+        "temperature": 0.2,
     }
 
     try:
@@ -57,7 +61,7 @@ Rule 4: Never invent products not listed in the inventory."""
             "https://api.groq.com/openai/v1/chat/completions",
             headers=headers,
             json=payload,
-            timeout=10
+            timeout=10,
         )
         data = res.json()
 
@@ -72,8 +76,14 @@ Rule 4: Never invent products not listed in the inventory."""
 
 
 def reply_via_whatsapp(recipient_phone, reply_text):
-    phone_id = os.getenv("WHATSAPP_PHONE_ID") or os.getenv("PHONE_NUMBER_ID")
-    token = os.getenv("WHATSAPP_CLOUD_API_TOKEN") or os.getenv("WHATSAPP_TOKEN")
+    phone_id = (
+        os.getenv("WHATSAPP_PHONE_ID")
+        or os.getenv("PHONE_NUMBER_ID")
+    )
+    token = (
+        os.getenv("WHATSAPP_CLOUD_API_TOKEN")
+        or os.getenv("WHATSAPP_TOKEN")
+    )
 
     if not phone_id or not token:
         print("ERROR: WhatsApp API credentials missing.")
@@ -83,24 +93,29 @@ def reply_via_whatsapp(recipient_phone, reply_text):
 
     headers = {
         "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
     }
 
     payload = {
         "messaging_product": "whatsapp",
         "to": recipient_phone,
         "type": "text",
-        "text": {"body": reply_text}
+        "text": {"body": reply_text},
     }
 
-    requests.post(url, json=payload, headers=headers)
+    requests.post(
+        url,
+        json=payload,
+        headers=headers,
+        timeout=10,
+    )
 
 
 def _process_whatsapp_payload(body):
     try:
         value = body["entry"][0]["changes"][0]["value"]
 
-        # 1. Ignore non-message events (e.g., status updates for read/delivered)
+        # Ignore status updates and other non-message events.
         if "messages" not in value:
             return
 
@@ -111,10 +126,10 @@ def _process_whatsapp_payload(body):
         print("WHATSAPP MESSAGE ID:", whatsapp_message_id)
         print(
             "WHATSAPP MESSAGE TEXT:",
-            message_data.get("text", {}).get("body", "")
+            message_data.get("text", {}).get("body", ""),
         )
 
-        if not whatsapp_message_id:
+        if not whatsapp_message_id or not from_phone:
             return
 
         text_dict = message_data.get("text") or {}
@@ -123,7 +138,7 @@ def _process_whatsapp_payload(body):
         if not user_text:
             return
 
-        # 2. ATOMIC LOCK / DEDUPLICATION CHECK
+        # Prevent processing the same WhatsApp message twice.
         with transaction.atomic():
             if ChatLog.objects.filter(
                 whatsapp_message_id=whatsapp_message_id
@@ -138,18 +153,17 @@ def _process_whatsapp_payload(body):
                 phone_number=from_phone
             )
 
-            # Create USER log entry FIRST to claim this message ID
             ChatLog.objects.create(
                 customer=customer,
                 sender="USER",
                 message=user_text,
-                whatsapp_message_id=whatsapp_message_id
+                whatsapp_message_id=whatsapp_message_id,
             )
 
         if customer.needs_human_help:
             return
 
-        # 3. PREPARE CONTEXT & GENERATE RESPONSE
+        # Read current inventory from the database.
         items = Product.objects.filter(is_available=True)
 
         inv_str = "\n".join([
@@ -163,14 +177,14 @@ def _process_whatsapp_payload(body):
         ).order_by("-timestamp")[:4]
 
         history_str = "\n".join([
-            f"{l.sender}: {l.message}"
-            for l in reversed(past_logs)
+            f"{log.sender}: {log.message}"
+            for log in reversed(past_logs)
         ])
 
         ai_raw_response = ask_groq_agent(
             user_text,
             inv_str,
-            history_str
+            history_str,
         )
 
         if "[HUMAN_REQUIRED]" in ai_raw_response:
@@ -179,33 +193,34 @@ def _process_whatsapp_payload(body):
 
             ai_clean_response = ai_raw_response.replace(
                 "[HUMAN_REQUIRED]",
-                ""
+                "",
             ).strip()
         else:
             ai_clean_response = ai_raw_response
 
-        # Save AI Response Log
         ChatLog.objects.create(
             customer=customer,
             sender="AI",
-            message=ai_clean_response
+            message=ai_clean_response,
         )
 
-        # Send reply
         reply_via_whatsapp(
             from_phone,
-            ai_clean_response
+            ai_clean_response,
         )
 
     except Exception as e:
         print(f"Error in background execution: {e}")
+
+
 def process_whatsapp_payload_in_background(body):
     close_old_connections()
+
     try:
         with processing_lock:
             _process_whatsapp_payload(body)
     finally:
-        close_old_connections()   
+        close_old_connections()
 
 
 @csrf_exempt
@@ -225,7 +240,7 @@ def whatsapp_bot_webhook(request):
 
         return HttpResponse(
             "Verification failed",
-            status=403
+            status=403,
         )
 
     if request.method == "POST":
@@ -234,41 +249,40 @@ def whatsapp_bot_webhook(request):
                 request.body.decode("utf-8")
             )
 
-            # Dispatch background worker immediately
             thread = threading.Thread(
                 target=process_whatsapp_payload_in_background,
-                args=(body,)
+                args=(body,),
             )
-
             thread.start()
 
-            # Fast 200 OK return to stop Meta retries
             return HttpResponse(
                 "EVENT_RECEIVED",
-                status=200
+                status=200,
             )
 
         except json.JSONDecodeError:
             return JsonResponse(
                 {"status": "invalid_json"},
-                status=400
+                status=400,
             )
 
     return JsonResponse(
         {"status": "method_not_allowed"},
-        status=405
+        status=405,
     )
-@login_required(login_url='/admin/login/')
-def owner_dashboard(request):
-    customers = CustomerLead.objects.order_by('-created_at')
 
-    selected_customer = None
-    customer_id = request.GET.get('customer')
+
+@login_required(login_url="/admin/login/")
+def owner_dashboard(request):
+    # Existing customer and chat information.
+    customers = CustomerLead.objects.order_by("-created_at")
+
+    customer_id = request.GET.get("customer")
 
     if customer_id:
         selected_customer = get_object_or_404(
             CustomerLead,
-            pk=customer_id
+            pk=customer_id,
         )
     else:
         selected_customer = customers.first()
@@ -276,12 +290,33 @@ def owner_dashboard(request):
     if selected_customer:
         messages = ChatLog.objects.filter(
             customer=selected_customer
-        ).order_by('timestamp')
+        ).order_by("timestamp")
     else:
         messages = ChatLog.objects.none()
 
-    return render(request, 'shop/owner_dashboard.html', {
-        'customers': customers,
-        'selected_customer': selected_customer,
-        'messages': messages,
-    })
+    # New inventory information for the owner dashboard.
+    products = Product.objects.all()
+
+    total_products = products.count()
+
+    low_stock_products = products.filter(
+        stock_quantity__gt=0,
+        stock_quantity__lte=5,
+    ).order_by("stock_quantity", "name")
+
+    out_of_stock_products = products.filter(
+        stock_quantity=0,
+    ).order_by("name")
+
+    return render(
+        request,
+        "shop/owner_dashboard.html",
+        {
+            "customers": customers,
+            "selected_customer": selected_customer,
+            "messages": messages,
+            "total_products": total_products,
+            "low_stock_products": low_stock_products,
+            "out_of_stock_products": out_of_stock_products,
+        },
+    )

@@ -1,4 +1,5 @@
-
+import hashlib
+import hmac
 import json
 import os
 import requests
@@ -243,11 +244,56 @@ def whatsapp_bot_webhook(request):
             status=403,
         )
 
+   
     if request.method == "POST":
+        app_secret = os.getenv("META_APP_SECRET")
+
+        if not app_secret:
+            return HttpResponse(
+                "Webhook signature configuration missing",
+                status=500,
+            )
+
+        signature = request.headers.get(
+            "X-Hub-Signature-256", ""
+        )
+
+        expected_signature = "sha256=" + hmac.new(
+            app_secret.encode("utf-8"),
+            request.body,
+            hashlib.sha256,
+        ).hexdigest()
+
+        if not hmac.compare_digest(
+            signature, expected_signature
+        ):
+            return HttpResponse(
+                "Invalid webhook signature",
+                status=403,
+            )
+
         try:
             body = json.loads(
                 request.body.decode("utf-8")
             )
+
+            thread = threading.Thread(
+                target=process_whatsapp_payload_in_background,
+                args=(body,),
+            )
+            thread.start()
+
+            return HttpResponse(
+                "EVENT_RECEIVED",
+                status=200,
+            )
+
+        except json.JSONDecodeError:
+            return JsonResponse(
+                {"status": "invalid_json"},
+                status=400,
+            )
+
 
             thread = threading.Thread(
                 target=process_whatsapp_payload_in_background,

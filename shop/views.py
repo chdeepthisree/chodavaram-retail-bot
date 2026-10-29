@@ -231,12 +231,9 @@ def whatsapp_bot_webhook(request):
         token = request.GET.get("hub.verify_token")
         challenge = request.GET.get("hub.challenge")
 
-        expected_token = (
-            os.getenv("VERIFY_TOKEN")
-            or "chodavaram_secret"
-        )
+      expected_token = os.getenv("VERIFY_TOKEN")
 
-        if mode == "subscribe" and token == expected_token:
+        if expected_token and mode == "subscribe" and token == expected_token:
             return HttpResponse(challenge, status=200)
 
         return HttpResponse(
@@ -295,22 +292,8 @@ def whatsapp_bot_webhook(request):
             )
 
 
-            thread = threading.Thread(
-                target=process_whatsapp_payload_in_background,
-                args=(body,),
-            )
-            thread.start()
 
-            return HttpResponse(
-                "EVENT_RECEIVED",
-                status=200,
-            )
-
-        except json.JSONDecodeError:
-            return JsonResponse(
-                {"status": "invalid_json"},
-                status=400,
-            )
+        
 
     return JsonResponse(
         {"status": "method_not_allowed"},

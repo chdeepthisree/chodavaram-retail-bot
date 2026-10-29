@@ -226,12 +226,13 @@ def process_whatsapp_payload_in_background(body):
 
 @csrf_exempt
 def whatsapp_bot_webhook(request):
+    
     if request.method == "GET":
         mode = request.GET.get("hub.mode")
         token = request.GET.get("hub.verify_token")
         challenge = request.GET.get("hub.challenge")
 
-      expected_token = os.getenv("VERIFY_TOKEN")
+        expected_token = os.getenv("VERIFY_TOKEN")
 
         if expected_token and mode == "subscribe" and token == expected_token:
             return HttpResponse(challenge, status=200)
@@ -240,6 +241,7 @@ def whatsapp_bot_webhook(request):
             "Verification failed",
             status=403,
         )
+
 
    
     if request.method == "POST":
